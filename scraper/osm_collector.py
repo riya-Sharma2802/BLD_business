@@ -14,6 +14,7 @@ queries, an identifying User-Agent, retry with back-off on 429/504.
 Usage (run on YOUR machine - needs internet):
     python osm_collector.py                       # all default cities -> ../data/listings_osm.csv
     python osm_collector.py --cities Meerut Delhi --per-city 120
+    python osm_collector.py --ratio 0.1 --fresh       # different count per city (10% of real count, 100-600)
     python osm_collector.py --contact your.email@gmail.com
     python osm_collector.py --endpoint https://overpass.kumi.systems/api/interpreter
 
@@ -192,41 +193,83 @@ def fetch_city(endpoints, bbox, user_agent, retries=3):
     raise RuntimeError("All Overpass servers refused or were busy; wait a few minutes and run again.")
 
 
+def load_existing(path):
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def save(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def pick_cap(found, args):
+    """How many listings to keep for a city that has `found` real listings in OSM.
+
+    --ratio keeps a share of the real count (clamped between --min-per-city and
+    --max-per-city), so bigger cities keep more rows than smaller ones.
+    Without --ratio a fixed --per-city cap is used.
+    """
+    if args.ratio:
+        return max(args.min_per_city, min(args.max_per_city, round(found * args.ratio)))
+    return args.per_city
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cities", nargs="*", default=list(CITIES), help="subset of: " + ", ".join(CITIES))
     ap.add_argument("--per-city", type=int, default=90, help="max listings kept per city")
+    ap.add_argument("--ratio", type=float, default=None, help="keep this share of each city's real count, e.g. 0.1 = 10%% (overrides --per-city)")
+    ap.add_argument("--min-per-city", type=int, default=100, help="lower bound when using --ratio")
+    ap.add_argument("--max-per-city", type=int, default=600, help="upper bound when using --ratio")
     ap.add_argument("--endpoint", default=None, help="use one specific Overpass server instead of the built-in list")
     ap.add_argument("--contact", default="student assignment", help="your email, put in the User-Agent (Overpass asks for an identifiable client)")
     ap.add_argument("--pause", type=int, default=12, help="seconds to wait between city queries")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / "data" / "listings_osm.csv"))
+    ap.add_argument("--fresh", action="store_true", help="ignore an existing output file and start over")
     args = ap.parse_args()
 
     endpoints = [args.endpoint] if args.endpoint else DEFAULT_ENDPOINTS
     user_agent = USER_AGENT_TEMPLATE.format(contact=args.contact)
+    out = Path(args.out)
 
-    all_rows = []
-    for i, city in enumerate(args.cities):
+    # Resume support: keep cities already saved, only fetch the missing ones.
+    all_rows = [] if args.fresh else load_existing(out)
+    done = {r["city"] for r in all_rows}
+    if done:
+        print(f"Resuming: {len(all_rows)} rows already saved for {sorted(done)}")
+
+    todo = [c for c in args.cities if c not in done]
+    failed = []
+    for i, city in enumerate(todo):
         if city not in CITIES:
             print(f"Unknown city {city!r}, skipping")
             continue
-        print(f"[{i + 1}/{len(args.cities)}] {city} ...")
-        rows = parse_elements(fetch_city(endpoints, CITIES[city], user_agent), city)[: args.per_city]
-        with_phone = sum(1 for r in rows if r["phone"])
-        print(f"  kept {len(rows)} listings ({with_phone} with phone)")
+        print(f"[{i + 1}/{len(todo)}] {city} ...")
+        try:
+            found = parse_elements(fetch_city(endpoints, CITIES[city], user_agent), city)
+            rows = found[: pick_cap(len(found), args)]
+        except RuntimeError as exc:
+            print(f"  FAILED {city}: {exc}")
+            failed.append(city)
+            continue
+        print(f"  found {len(found)} in OSM, kept {len(rows)} ({sum(1 for r in rows if r['phone'])} with phone)")
         all_rows.extend(rows)
-        if i < len(args.cities) - 1:
+        save(out, all_rows)  # save after every city so nothing is lost
+        if i < len(todo) - 1:
             time.sleep(args.pause)
 
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(all_rows)
+    save(out, all_rows)
     print(f"\nSaved {len(all_rows)} real listings to {out}")
+    if failed:
+        print(f"Could not fetch: {', '.join(failed)}. Run the same command again in a few minutes; finished cities are skipped.")
     if len(all_rows) < 500:
-        print("Fewer than 500 rows: add more cities or raise --per-city.")
+        print("Fewer than 500 rows: run again for the missing cities or raise --per-city.")
 
 
 if __name__ == "__main__":

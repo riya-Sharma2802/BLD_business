@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ListingIn(BaseModel):
@@ -46,3 +47,23 @@ class SummaryResponse(BaseModel):
     total_categories: int
     total_sources: int
     with_phone: int
+
+
+class ListingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    business_name: str
+    category: str
+    city: str
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    source: str
+    created_at: Optional[datetime] = None
+
+
+class ListingsPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ListingOut]

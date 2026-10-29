@@ -11,10 +11,11 @@ OpenStreetMap  →  Python collector  →  MySQL  →  FastAPI  →  React dashb
  (data source)      (osm_collector.py)  (listing_master)  (REST API)   (charts)
 ```
 
-1. **Collect:** a Python script pulls real business listings (name, category, city, address, phone, source) from OpenStreetMap for 12 Indian cities. About 1,080 listings are loaded.
+1. **Collect:** a Python script pulls real business listings (name, category, city, address, phone, source) from OpenStreetMap for 12 Indian cities. About 4,800 listings are loaded.
 2. **Store:** the listings live in one MySQL table, `listing_master`.
 3. **Serve:** FastAPI exposes a bulk-insert endpoint and three aggregation endpoints (city, category, source).
 4. **Show:** the React dashboard calls the API and draws a bar chart (cities), a horizontal bar chart (categories) and a donut chart (sources), plus summary cards.
+5. **Explore:** click any bar or slice to filter. All charts, cards and a searchable listings table update together (e.g. click *Delhi* to see Delhi's categories and sources). There is also a light/dark theme toggle.
 
 ## Tech stack
 
@@ -38,10 +39,11 @@ data/       listings.csv
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/api/listings/bulk` | Bulk insert listings; duplicates are skipped |
-| GET | `/api/dashboard/city-wise` | Count per city |
-| GET | `/api/dashboard/category-wise` | Count per category |
-| GET | `/api/dashboard/source-wise` | Count per source |
-| GET | `/api/dashboard/summary` | Totals for the summary cards |
+| GET | `/api/dashboard/city-wise` | Count per city (optional `category`, `source` filters) |
+| GET | `/api/dashboard/category-wise` | Count per category (optional `city`, `source`) |
+| GET | `/api/dashboard/source-wise` | Count per source (optional `city`, `category`) |
+| GET | `/api/dashboard/summary` | Totals for the summary cards (optional `city`, `category`, `source`) |
+| GET | `/api/listings` | Paginated listings with `city`, `category`, `source`, `search`, `page`, `page_size` |
 
 Interactive docs: `http://localhost:8000/docs`
 
@@ -94,7 +96,7 @@ Justdial, Sulekha and Google Maps forbid scraping in their terms of service, so 
 
 - Only places with a name are kept; duplicates are removed.
 - If OSM has no phone, the phone is left empty. If it has no street address, the address uses the place's real coordinates (`Near lat, lon, City`).
-- Each city is capped at 90 listings, so the city chart is evenly balanced by design.
+- Each city keeps a share (default run: 10%, between 100 and 600) of the listings OSM has for it, using the collector's `--ratio` option. Bigger cities therefore keep more rows than smaller ones, which keeps the dataset a manageable size. This is a sample of OSM, not a full census.
 
 Data © OpenStreetMap contributors. Counts reflect what OSM contains, not a full census of businesses.
 
